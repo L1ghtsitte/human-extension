@@ -1,0 +1,8 @@
+﻿{
+  "slug": "coin-flip",
+  "name": "Coin Flip",
+  "version": "1.0.0",
+  "description": "Slash command /coin: орел или решка с очень маленьким шансом на ребро.",
+  "entrypoint": "coin_plugin.py",
+  "min_bot_version": "1.2.0"
+}
