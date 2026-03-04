@@ -1,8 +1,24 @@
 ﻿{
   "slug": "coin-flip",
   "name": "Coin Flip",
-  "version": "1.0.0",
-  "description": "Slash command /coin: орел или решка с очень маленьким шансом на ребро.",
+  "version": "1.3.0",
+  "description": "Slash-команда /coin с ASCII-выпадением, редким ребром и публичной статистикой по серверу.",
   "entrypoint": "coin_plugin.py",
-  "min_bot_version": "1.2.0"
+  "min_bot_version": "1.2.0",
+  "settings_schema": [
+    {
+      "key": "edge_chance",
+      "label": "Шанс ребра",
+      "type": "number",
+      "default": 0.002,
+      "help": "Вероятность выпадения ребра (0..1). По умолчанию 0.002 = 0.2%"
+    },
+    {
+      "key": "edge_message",
+      "label": "Сообщение для ребра",
+      "type": "text",
+      "default": "🪙 Ребро! Невероятно редкий исход.",
+      "placeholder": "Текст для редкого результата"
+    }
+  ]
 }
