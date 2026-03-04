@@ -1,4 +1,5 @@
-﻿import random
+﻿import json
+import random
 
 import discord
 from discord import app_commands
@@ -9,32 +10,44 @@ from database import db
 DEFAULT_EDGE_CHANCE = 0.002
 DEFAULT_EDGE_MESSAGE = '🪙 Ребро! Невероятно редкий исход.'
 PLUGIN_SLUG = 'coin-flip'
+PERIOD_OPTIONS = {
+    '1d': ("AND created_at >= NOW() - INTERVAL '1 day'", '1 день'),
+    '7d': ("AND created_at >= NOW() - INTERVAL '7 days'", '7 дней'),
+    '30d': ("AND created_at >= NOW() - INTERVAL '30 days'", '30 дней'),
+    'all': ('', 'всё время'),
+}
 ASCII_FLIPS = {
     'eagle': r'''
-   .------.
- .'  /\   '.
-/   /  \    \
-|  | () |   |
-\   \__/   /
- '.      .'
-   '----'
+        .-=========-.
+      .'   _  _    '.
+     /   _( )( )_    \
+    |   /  /\ /\ \    |
+    |  |  /  V  \ |   |
+    |  |  \_/\_/ |    |
+     \  \   /\   /   /
+      '. '.__.__.' .'
+        '-._____.-'
 '''.strip('\n'),
     'tails': r'''
-   .------.
- .'  __   '.
-/   /__\    \
-|   \__/    |
-\    /\    /
- '.      .'
-   '----'
+        .-=========-.
+      .'    ____   '.
+     /    .'-..-'.   \
+    |    /  /__\  \   |
+    |    |  \__/  |   |
+    |    \  .--.  /   |
+     \    '.___.'    /
+      '.           .'
+        '-._____.-'
 '''.strip('\n'),
     'edge': r'''
-    _____
-  /  ___ \
- |  |   | |
- |  |   | |
- |  |___| |
-  \_____ /
+          __
+       .-'  '-.
+      /  .--.  \
+      | |    | |
+      | |    | |
+      | |____| |
+      \  '--'  /
+       '-.__.-'
 '''.strip('\n'),
 }
 
@@ -42,6 +55,23 @@ ASCII_FLIPS = {
 class CoinFlip(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    @staticmethod
+    def _as_settings(value):
+        if isinstance(value, dict):
+            return value
+        if value is None:
+            return {}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                return {}
+        try:
+            return dict(value)
+        except Exception:
+            return {}
 
     async def _ensure_stats_table(self):
         await db.execute(
@@ -72,7 +102,7 @@ class CoinFlip(commands.Cog):
             PLUGIN_SLUG,
         )
 
-        settings = dict(row['settings_json']) if row and row['settings_json'] else {}
+        settings = self._as_settings(row['settings_json'] if row else None)
 
         try:
             edge_chance = float(settings.get('edge_chance', DEFAULT_EDGE_CHANCE))
@@ -84,45 +114,82 @@ class CoinFlip(commands.Cog):
 
         return edge_chance, edge_message
 
-    async def _build_stats_text(self, guild_id: int | None):
+    async def _build_stats_text(self, guild_id: int | None, period: str):
         if not guild_id:
             return 'Команда статистики доступна только на сервере.'
 
         await self._ensure_stats_table()
-        total = await db.fetchval('SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1', guild_id) or 0
-        eagle = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'eagle'", guild_id) or 0
-        tails = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'tails'", guild_id) or 0
-        edge = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'edge'", guild_id) or 0
-        week_total = await db.fetchval(
-            '''
+        key = str(period or 'all').strip().lower()
+        where_clause, label = PERIOD_OPTIONS.get(key, PERIOD_OPTIONS['all'])
+        total = await db.fetchval(
+            f'''
             SELECT COUNT(*)
             FROM coin_flip_stats
             WHERE server_id = $1
-              AND created_at >= NOW() - INTERVAL '7 days'
+            {where_clause}
+            ''',
+            guild_id,
+        ) or 0
+        eagle = await db.fetchval(
+            f'''
+            SELECT COUNT(*)
+            FROM coin_flip_stats
+            WHERE server_id = $1
+              AND result = 'eagle'
+              {where_clause}
+            ''',
+            guild_id,
+        ) or 0
+        tails = await db.fetchval(
+            f'''
+            SELECT COUNT(*)
+            FROM coin_flip_stats
+            WHERE server_id = $1
+              AND result = 'tails'
+              {where_clause}
+            ''',
+            guild_id,
+        ) or 0
+        edge = await db.fetchval(
+            f'''
+            SELECT COUNT(*)
+            FROM coin_flip_stats
+            WHERE server_id = $1
+              AND result = 'edge'
+              {where_clause}
             ''',
             guild_id,
         ) or 0
 
         if not total:
-            return 'Статистика /coin пока пустая.'
+            return f'Статистика /coin за период "{label}" пока пустая.'
 
         def pct(value: int) -> str:
             return f'{(value / total) * 100:.1f}%'
 
         return (
             'Статистика /coin по всему серверу\n'
+            f'Период: **{label}**\n'
             f'Всего: **{int(total)}**\n'
-            f'За 7 дней: **{int(week_total)}**\n'
             f'🦅 Орел: **{int(eagle)}** ({pct(int(eagle))})\n'
             f'🪶 Решка: **{int(tails)}** ({pct(int(tails))})\n'
             f'🪙 Ребро: **{int(edge)}** ({pct(int(edge))})'
         )
 
     @app_commands.command(name='coin', description='Подбросить монетку: орел, решка или редкое ребро')
-    @app_commands.describe(info='Показать статистику /coin вместо броска')
-    async def coin(self, interaction: discord.Interaction, info: bool = False):
+    @app_commands.describe(info='Показать статистику /coin вместо броска', period='Период статистики: 1d/7d/30d/all')
+    @app_commands.choices(
+        period=[
+            app_commands.Choice(name='1 день', value='1d'),
+            app_commands.Choice(name='7 дней', value='7d'),
+            app_commands.Choice(name='30 дней', value='30d'),
+            app_commands.Choice(name='Всё время', value='all'),
+        ]
+    )
+    async def coin(self, interaction: discord.Interaction, info: bool = False, period: app_commands.Choice[str] | None = None):
         if info:
-            text = await self._build_stats_text(interaction.guild_id)
+            selected_period = period.value if period else 'all'
+            text = await self._build_stats_text(interaction.guild_id, selected_period)
             await interaction.response.send_message(text, ephemeral=False)
             return
 
@@ -149,13 +216,8 @@ class CoinFlip(commands.Cog):
             interaction.user.id if interaction.user else None,
             result_key,
         )
-        total = await db.fetchval('SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1', interaction.guild_id) or 0
-        eagle = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'eagle'", interaction.guild_id) or 0
-        tails = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'tails'", interaction.guild_id) or 0
-        edge = await db.fetchval("SELECT COUNT(*) FROM coin_flip_stats WHERE server_id = $1 AND result = 'edge'", interaction.guild_id) or 0
         art = ASCII_FLIPS.get(result_key, '').strip()
-        stats_line = f'Статистика сервера: всего {int(total)} | орел {int(eagle)} | решка {int(tails)} | ребро {int(edge)}'
-        message = f'```{art}```\n{result}\n{stats_line}' if art else f'{result}\n{stats_line}'
+        message = f'```{art}```\n{result}' if art else result
         await interaction.response.send_message(message, ephemeral=False)
 
 
