@@ -1,5 +1,6 @@
 ﻿import json
 import random
+from pathlib import Path
 
 import discord
 from discord import app_commands
@@ -10,45 +11,17 @@ from database import db
 DEFAULT_EDGE_CHANCE = 0.002
 DEFAULT_EDGE_MESSAGE = '🪙 Ребро! Невероятно редкий исход.'
 PLUGIN_SLUG = 'coin-flip'
+IMG_DIR = Path(__file__).resolve().parent / 'img'
+RESULT_IMAGES = {
+    'eagle': 'eagle.png',
+    'tails': 'tails.png',
+    'edge': 'edge.png',
+}
 PERIOD_OPTIONS = {
     '1d': ("AND created_at >= NOW() - INTERVAL '1 day'", '1 день'),
     '7d': ("AND created_at >= NOW() - INTERVAL '7 days'", '7 дней'),
     '30d': ("AND created_at >= NOW() - INTERVAL '30 days'", '30 дней'),
     'all': ('', 'всё время'),
-}
-ASCII_FLIPS = {
-    'eagle': r'''
-        .-=========-.
-      .'   _  _    '.
-     /   _( )( )_    \
-    |   /  /\ /\ \    |
-    |  |  /  V  \ |   |
-    |  |  \_/\_/ |    |
-     \  \   /\   /   /
-      '. '.__.__.' .'
-        '-._____.-'
-'''.strip('\n'),
-    'tails': r'''
-        .-=========-.
-      .'    ____   '.
-     /    .'-..-'.   \
-    |    /  /__\  \   |
-    |    |  \__/  |   |
-    |    \  .--.  /   |
-     \    '.___.'    /
-      '.           .'
-        '-._____.-'
-'''.strip('\n'),
-    'edge': r'''
-          __
-       .-'  '-.
-      /  .--.  \
-      | |    | |
-      | |    | |
-      | |____| |
-      \  '--'  /
-       '-.__.-'
-'''.strip('\n'),
 }
 
 
@@ -72,6 +45,18 @@ class CoinFlip(commands.Cog):
             return dict(value)
         except Exception:
             return {}
+
+    @staticmethod
+    def _png_size(path: Path) -> tuple[int, int] | None:
+        try:
+            raw = path.read_bytes()
+        except Exception:
+            return None
+        if len(raw) < 24 or raw[:8] != b'\x89PNG\r\n\x1a\n':
+            return None
+        width = int.from_bytes(raw[16:20], byteorder='big')
+        height = int.from_bytes(raw[20:24], byteorder='big')
+        return (width, height)
 
     async def _ensure_stats_table(self):
         await db.execute(
@@ -216,9 +201,24 @@ class CoinFlip(commands.Cog):
             interaction.user.id if interaction.user else None,
             result_key,
         )
-        art = ASCII_FLIPS.get(result_key, '').strip()
-        message = f'```{art}```\n{result}' if art else result
-        await interaction.response.send_message(message, ephemeral=False)
+
+        image_name = RESULT_IMAGES.get(result_key, '')
+        image_path = (IMG_DIR / image_name).resolve() if image_name else None
+        if image_path and image_path.exists() and image_path.is_file():
+            dims = self._png_size(image_path)
+            title_suffix = f' ({dims[0]}x{dims[1]})' if dims else ''
+            embed = discord.Embed(
+                title=f'Подброс монеты{title_suffix}',
+                description=result,
+                color=discord.Color.gold(),
+            )
+            filename = image_path.name
+            file = discord.File(str(image_path), filename=filename)
+            embed.set_image(url=f'attachment://{filename}')
+            await interaction.response.send_message(embed=embed, file=file, ephemeral=False)
+            return
+
+        await interaction.response.send_message(result, ephemeral=False)
 
 
 async def setup(bot: commands.Bot):
